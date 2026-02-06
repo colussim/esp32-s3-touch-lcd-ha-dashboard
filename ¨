@@ -1,0 +1,101 @@
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "nvs_flash.h"
+
+ESP_LOGI("MEM", "psram found=%d", esp_psram_is_initialized());
+ESP_LOGI("MEM", "free SPIRAM=%u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+ESP_LOGI("MEM", "free internal=%u", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+ESP_LOGI("MEM", "largest SPIRAM=%u", (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+ESP_LOGI("MEM", "largest internal=%u", (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+
+// BSP Waveshare + LVGL
+#include "bsp/esp32_s3_touch_lcd_4.h"
+#include "lvgl.h"
+
+static const char *TAG = "ws_lcd4";
+
+static lv_obj_t *label_clock;
+
+static void btn_event_cb(lv_event_t *e)
+{
+    const char *name = (const char *)lv_event_get_user_data(e);
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        ESP_LOGI(TAG, "Button clicked: %s", name);
+        // Ici tu déclencheras plus tard un appel HA (API / MQTT)
+    }
+}
+
+static void ui_create(void)
+{
+#if LVGL_VERSION_MAJOR >= 9
+    lv_obj_t *scr = lv_screen_active();
+#else
+    lv_obj_t *scr = lv_scr_act();
+#endif
+
+    lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+
+    // Label "heure"
+    label_clock = lv_label_create(scr);
+    lv_label_set_text(label_clock, "00:00");
+    lv_obj_align(label_clock, LV_ALIGN_TOP_MID, 0, 12);
+
+    // Bouton 1
+    lv_obj_t *btn1 = lv_btn_create(scr);
+    lv_obj_set_size(btn1, 160, 110);
+    lv_obj_align(btn1, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_add_event_cb(btn1, btn_event_cb, LV_EVENT_ALL, (void*)"lamp1");
+
+    lv_obj_t *l1 = lv_label_create(btn1);
+    lv_label_set_text(l1, "Lamp 1");
+    lv_obj_center(l1);
+
+    // Bouton 2
+    lv_obj_t *btn2 = lv_btn_create(scr);
+    lv_obj_set_size(btn2, 160, 110);
+    lv_obj_align(btn2, LV_ALIGN_RIGHT_MID, -20, 0);
+    lv_obj_add_event_cb(btn2, btn_event_cb, LV_EVENT_ALL, (void*)"lamp2");
+
+    lv_obj_t *l2 = lv_label_create(btn2);
+    lv_label_set_text(l2, "Lamp 2");
+    lv_obj_center(l2);
+
+    // Température (placeholder)
+    lv_obj_t *temp = lv_label_create(scr);
+    lv_label_set_text(temp, "Temp: --.- C");
+    lv_obj_align(temp, LV_ALIGN_BOTTOM_MID, 0, -12);
+}
+
+void app_main(void)
+{
+    ESP_ERROR_CHECK(nvs_flash_init());
+    ESP_LOGI(TAG, "Boot");
+
+    // Init écran + touch + task LVGL via BSP
+    // (API esp-bsp : bsp_display_start / bsp_display_start_with_config, selon BSP)
+    ESP_LOGI(TAG, "Starting display via BSP...");
+    bsp_display_start();   // le BSP crée la tâche LVGL et init LCD/touch
+
+    // Crée l'UI (thread-safe via lvgl_port)
+    bsp_display_lock(0);
+    ui_create();
+    bsp_display_unlock();
+
+    // Simule la mise à jour de l'heure
+    int m = 0;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        m = (m + 1) % 60;
+
+        char buf[16];
+        snprintf(buf, sizeof(buf), "12:%02d", m);
+
+        bsp_display_lock(0);
+        lv_label_set_text(label_clock, buf);
+        bsp_display_unlock();
+
+        ESP_LOGI(TAG, "Tick, clock=%s", buf);
+    }
+}

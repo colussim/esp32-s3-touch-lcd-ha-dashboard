@@ -1,0 +1,23 @@
+dependencies:
+  esp_lcd_panel_io_additions: ^1
+  esp_lcd_st7701: '*'
+  esp_lcd_touch_gt911: '*'
+  espressif/esp_lvgl_port:
+    public: true
+    version: ^2
+  idf: '>=5.3'
+  lvgl/lvgl: '>=8,<10'
+  waveshare/custom_io_expander_ch32v003:
+    public: true
+    version: '*'
+description: Board Support Package (BSP) for Waveshare ESP32-S3-Touch-LCD-4
+repository: git://github.com/waveshareteam/Waveshare-ESP32-components.git
+repository_info:
+  commit_sha: 57719901863c06b81ca619d994c719500df1a9e1
+  path: bsp/esp32_s3_touch_lcd_4
+tags:
+- bsp
+targets:
+- esp32s3
+url: https://www.waveshare.com/esp32-s3-touch-lcd-4.htm
+version: 2.0.0
