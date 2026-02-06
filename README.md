@@ -26,7 +26,7 @@ Hopefully, this will be useful to you 😀.
 
 ## ⚠️ Why it did not work (or worked poorly) with Arduino IDE / ESPHome
 
-### 1) The LCD pipeline is **dual**
+### 1️⃣  The LCD pipeline is **dual**
 On this board, the display path is split into:
 - **Parallel RGB** (PCLK / HS / VS / DE + 16 data pins): video stream
 - **3-wire SPI** (SCL / SDA / CS): **ST7701 initialization** at boot
@@ -62,7 +62,7 @@ flowchart LR
   ST7701 --- NOTE
 ```
 
-### 2) Framebuffer memory (PSRAM) is mandatory
+### 2️⃣ Framebuffer memory (PSRAM) is mandatory
 A 480×480 framebuffer in RGB565 is approximately **460 KB**.  
 Depending on the number of buffers and DMA alignment requirements,
 allocation in internal RAM may fail (`ESP_ERR_NO_MEM`).
@@ -70,14 +70,14 @@ allocation in internal RAM may fail (`ESP_ERR_NO_MEM`).
 Under Arduino, PSRAM allocation had to be explicitly forced (`fb_in_psram=1`).  
 On the BSP side, this flag was not applied (see fix below).
 
-### 3) PSRAM mode (Quad vs Octal) on ESP-IDF
+### 3️⃣ PSRAM mode (Quad vs Octal) on ESP-IDF
 Under ESP-IDF, an incorrect PSRAM configuration causes an immediate reboot:
 `PSRAM ID read error: 0x00ffffff ... wrong PSRAM line mode`
 
 This symptom is typical of a **Quad vs Octal mismatch** on ESP32-S3.  
 (see related ESP-IDF issue)
 
-### 4) ESP-IDF “dev” (6.x-dev) = traps
+### 4️⃣ ESP-IDF “dev” (6.x-dev) = traps
 The Waveshare BSP targets stable ESP-IDF releases (>= 5.3).  
 Using an ESP-IDF dev branch may result in build or link errors.
 
@@ -471,7 +471,11 @@ This board works perfectly, but:
 ## 📚 References
 
 [Waveshare/esp32_s3_touch_lcd_4](https://components.espressif.com/components/waveshare/esp32_s3_touch_lcd_4/versions/1.0.3/dependencies?language=en)
+
 [Waveshare ESP32-S3 4inch Display Development Board](https://www.waveshare.com/esp32-s3-touch-lcd-4.htm?sku=28154)
+
 [Getting Started with ESP-IDF](https://idf.espressif.com/)
+
 [LVGL Library](https://lvgl.io/)
+
 [LVGL Image Converter](https://lvgl.io/tools/imageconverter)
