@@ -1,14 +1,14 @@
 #include "wifi_config.h"
 
 WiFiConfig wifi_config = {
-    .ssid = "Gen_home2",
-    .password = "zinc792_hart",
+    .ssid = "your_ssid",
+    .password = "your_password",
 
     .use_static_ip = true,
 
-    .static_ip = "192.168.0.19",
-    .gateway   = "192.168.0.254",
-    .subnet    = "255.255.255.0",
-    .dns1      = "192.168.0.254",
-    .dns2      = "8.8.8.8"
+    .static_ip = "X.X.X.X",
+    .gateway   = "X.X.X.X",
+    .subnet    = "X.X.X.X",
+    .dns1      = "X.X.X.X",
+    .dns2      = "X.X.X.X"
 };

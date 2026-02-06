@@ -1,54 +1,99 @@
-# Waveshare ESP32-S3-Touch-LCD-4 — LVGL Dashboard (ESP-IDF)
+![ESP32](https://img.shields.io/badge/ESP32-Embedded-red) ![ESP-IDF](https://img.shields.io/badge/Framework-ESP--IDF-blue) ![Language](https://img.shields.io/badge/Language-C-informational)
+# 🖥️ Waveshare ESP32-S3-Touch-LCD-4 — LVGL Dashboard (ESP-IDF)
 
-Ce dépôt documente **comment faire fonctionner réellement** le board **Waveshare ESP32-S3-Touch-LCD-4 (480×480, ST7701 + RGB)** et pourquoi l’approche Arduino/ESPHome peut échouer (ou être instable), ainsi que les correctifs nécessaires côté ESP-IDF/BSP.
+## 📘 Introduction
 
-> Matériel : Waveshare ESP32-S3-Touch-LCD-4  
-> LCD : RGB 480×480 + contrôleur **ST7701** initialisé via SPI 3-wire  
+This repository documents how to **actually make the Waveshare ESP32-S3-Touch-LCD-4 board work** (480×480 display, ST7701 controller + RGB interface).
+
+After numerous unsuccessful attempts using **Arduino** and **ESPHome**, all of which ended in failure,
+I finally managed to get this board working properly by using **Espressif’s ESP-IDF**.
+
+This repository shares the required configuration, findings, and lessons learned,
+with the goal of saving others from wasting time on the same dead ends.
+
+Hopefully, this will be useful to you 😀.
+
+## 🛠️ Hardware Components
+
+> Equipment : Waveshare ESP32-S3-Touch-LCD-4  
+> LCD : RGB 480×480 + controler **ST7701** initialized via SPI 3-wire  
 > Touch : GT911 (I²C)  
 > IO Expander : TCA9554 (I²C, 0x24)  
-> Flash/PSRAM : 16MB / 8MB PSRAM (selon module)  
+> Flash/PSRAM : 16MB / 8MB PSRAM 
 > Wiki + schémas : Waveshare  [oai_citation:1‡Waveshare Electronics](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-4?srsltid=AfmBOope1FwUCfc4iPT0jm7qCOWfa2dng7qnEUNr_7eFYw2h0RY4MIbC&utm_source=chatgpt.com)
 
 ---
 
-## Pourquoi ça ne fonctionnait pas (ou mal) sous Arduino IDE / ESPHome
+## ⚠️ Why it did not work (or worked poorly) with Arduino IDE / ESPHome
 
-### 1) Le pipeline LCD est **double**
-Sur ce board, l’affichage passe par :
-- **RGB parallèle** (PCLK/HS/VS/DE + 16 data pins) : flux vidéo
-- **SPI 3-wire** (SCL/SDA/CS) : **initialisation du ST7701** au boot
+### 1) The LCD pipeline is **dual**
+On this board, the display path is split into:
+- **Parallel RGB** (PCLK / HS / VS / DE + 16 data pins): video stream
+- **3-wire SPI** (SCL / SDA / CS): **ST7701 initialization** at boot
 
-Si le ST7701 n’est pas initialisé correctement, le driver RGB peut retourner `ESP_OK` sur les `draw_bitmap()`, **sans que l’écran n’affiche quoi que ce soit**.
+If the ST7701 is not properly initialized, the RGB driver may return `ESP_OK`
+for `draw_bitmap()` calls **while the screen remains completely blank**.
 
-### 2) Mémoire framebuffer (PSRAM) obligatoire
-Un framebuffer 480×480 en RGB565 ≈ **460 KB**.  
-Selon le nombre de buffers / alignements DMA, l’allocation en RAM interne peut échouer (`ESP_ERR_NO_MEM`).
+```mermaid
+flowchart LR
+  subgraph ESP32S3
+    APP["App / LVGL / GUI"]
+    RGBDRV["ESP-IDF RGB Panel Driver"]
+    SPIINIT["ST7701 init (3-wire SPI)"]
+    PSRAM["PSRAM framebuffers"]
+    IRAM["Internal RAM"]
+  end
 
-Sous Arduino, on a dû explicitement forcer l’allocation en PSRAM (`fb_in_psram=1`).  
-Côté BSP, ce flag n’était pas appliqué (voir correctif plus bas).
+  subgraph LCD
+    ST7701["ST7701 controller"]
+    RGBIF["Parallel RGB interface"]
+    PANEL["480x480 TFT panel"]
+  end
 
-### 3) PSRAM mode (Quad vs Octal) côté ESP-IDF
-Sous ESP-IDF, une mauvaise configuration PSRAM donne un reboot immédiat :
+  APP -->|render| RGBDRV
+  RGBDRV -->|allocate| PSRAM
+  RGBDRV -.->|no PSRAM -> no memory| IRAM
+
+  SPIINIT -->|boot init| ST7701
+  RGBDRV -->|pixel stream| RGBIF --> PANEL
+  ST7701 -->|enable timings| RGBIF
+
+  NOTE["If ST7701 is not initialized\nRGB draw calls may return ESP_OK\nbut the screen stays blank"]
+  ST7701 --- NOTE
+```
+
+### 2) Framebuffer memory (PSRAM) is mandatory
+A 480×480 framebuffer in RGB565 is approximately **460 KB**.  
+Depending on the number of buffers and DMA alignment requirements,
+allocation in internal RAM may fail (`ESP_ERR_NO_MEM`).
+
+Under Arduino, PSRAM allocation had to be explicitly forced (`fb_in_psram=1`).  
+On the BSP side, this flag was not applied (see fix below).
+
+### 3) PSRAM mode (Quad vs Octal) on ESP-IDF
+Under ESP-IDF, an incorrect PSRAM configuration causes an immediate reboot:
 `PSRAM ID read error: 0x00ffffff ... wrong PSRAM line mode`
-Ce symptôme est typique d’un mismatch **Quad vs Octal** sur ESP32-S3.  [oai_citation:2‡GitHub](https://github.com/espressif/esp-idf/issues/10417?utm_source=chatgpt.com)
 
-### 4) ESP-IDF “dev” (6.x-dev) = pièges
-Le BSP Waveshare cible des versions IDF stables (>= 5.3).  
-Sur une branche IDF dev, on peut avoir des erreurs de build/link.
+This symptom is typical of a **Quad vs Octal mismatch** on ESP32-S3.  
+(see related ESP-IDF issue)
 
----
-
-## Solution stable : ESP-IDF + BSP officiel Waveshare
-
-Le plus fiable est d’utiliser le BSP officiel (ESP Component Registry).  [oai_citation:3‡components.espressif.com](https://components.espressif.com/components/waveshare/esp32_s3_touch_lcd_4/versions/2.0.0/readme?utm_source=chatgpt.com)
-
-### Prérequis
-- macOS + Xcode command line tools
-- ESP-IDF **v5.4.x** recommandé (>= 5.3 requis par le BSP)
+### 4) ESP-IDF “dev” (6.x-dev) = traps
+The Waveshare BSP targets stable ESP-IDF releases (>= 5.3).  
+Using an ESP-IDF dev branch may result in build or link errors.
 
 ---
 
-## Installation ESP-IDF (macOS)
+## ✅ Stable solution: ESP-IDF + official Waveshare BSP
+
+The most reliable approach is to use the **official Waveshare BSP** published in the
+ESP Component Registry.
+
+### Prerequisites (macOs)
+- macOS with Xcode Command Line Tools installed
+- **ESP-IDF v5.4.x** recommended (>= 5.3 required by the BSP)
+---
+
+## 🛠 Installation ESP-IDF (macOS)
 
 ```bash
 xcode-select --install
@@ -64,14 +109,15 @@ git submodule update --init --recursive
 . ./export.sh
 
 idf.py --version
+ESP-IDF v5.4.1
 ```
 
-Création du projet + ajout du BSP
+Project creation + adding the BSP
 
 ```bash
-cd ~/esp
-idf.py create-project ws_test
-cd ws_test
+
+idf.py create-project esp32-s3-touch-lcd-ha-dashboard
+cd esp32-s3-touch-lcd-ha-dashboard
 idf.py set-target esp32s3
 
 idf.py add-dependency "waveshare/esp32_s3_touch_lcd_4^2.0.0"
@@ -79,35 +125,40 @@ idf.py add-dependency "waveshare/esp32_s3_touch_lcd_4^2.0.0"
 ```
 
 
-Correctifs BSP nécessaires (observés en pratique)
+## 🔧 Required BSP fixes (observed in practice)
 
-A) Ajout de <string.h> (bug de compilation)
+### A) Add `<string.h>` (compilation bug)
 
-Erreur rencontrée :
-implicit declaration of function 'memcpy'
+**Error encountered:**
+```
+implicit declaration of function ‘memcpy’
+```
+**Fix (in the managed component):**
 
-Fix (dans le composant géré) :
-
-Fichier :
+**File:** 
 managed_components/waveshare__esp32_s3_touch_lcd_4/esp32_s3_touch_lcd_4.c
 
-Ajouter :
+Add :
 
 ```c
 #include <string.h>
 
 ```
-> Note : managed_components/ peut être régénéré lors d’une mise à jour des dépendances.
+> Note: changes made under `managed_components/` may be overwritten when updating dependencies.
 
-B) Forcer les framebuffers en PSRAM (sinon ESP_ERR_NO_MEM)
+### B) Force framebuffers into PSRAM (otherwise `ESP_ERR_NO_MEM`)
 
-Erreur rencontrée :
+**Error encountered:**
+```c
 lcd_rgb_panel_alloc_frame_buffers: no mem for frame buffer
+```
 
-Dans le même fichier BSP, repérer la struct :
+In the same BSP file, locate the structure:
+```c
 esp_lcd_rgb_panel_config_t rgb_config = { ... };
+```
 
-Juste après la struct, forcer :
+Right after the structure definition, force :
 
 ```c
 rgb_config.flags.fb_in_psram = 1;
@@ -115,19 +166,23 @@ rgb_config.num_fbs = 1;
 ```
 ---
 
-Configuration PSRAM (CRITIQUE)
+## 🚨 PSRAM configuration (CRITICAL)
 
-Dans idf.py menuconfig :
+In `idf.py menuconfig`:
 
-Component config -> ESP PSRAM
-	•	Activer PSRAM
-	•	Choisir le bon mode :
-	•	OCTAL Mode PSRAM (souvent requis sur ce board / module)
-	•	Si erreur wrong PSRAM line mode, tester l’autre : QUAD Mode PSRAM
+Component config → ESP PSRAM  
+- Enable PSRAM  
+- Select the correct PSRAM mode:
+  - **OCTAL Mode PSRAM** (often required on this board / module)
+  - If you encounter a `wrong PSRAM line mode` error, try the other option:
+    **QUAD Mode PSRAM**
 
-Référence symptôme : PSRAM ID read error: 0x00ffffff
+**Reference symptom:**
+```c
+PSRAM ID read error: 0x00ffffff
+```
 
-Build / Flash / Monitor
+**Build / Flash / Monitor**
 
 ```bash
 idf.py fullclean
@@ -135,24 +190,11 @@ idf.py build
 idf.py -p /dev/cu.usbmodemXXXX flash monitor
 ```
 
-> Quitter monitor : Ctrl + ]
 
 ---
 
-Exemple LVGL minimal (2 boutons)
 
-Une fois bsp_display_start() OK, un écran LVGL minimal affiche 2 boutons + labels.
-
-Le BSP initialise :
-
-	•	IO 3-wire SPI pour ST7701
-	•	panel ST7701
-	•	panel RGB + timings
-	•	touch GT911
-
----
-
-## Mapping GPIO — Waveshare ESP32-S3-Touch-LCD-4 (480×480)
+## 🔌 Mapping GPIO — Waveshare ESP32-S3-Touch-LCD-4 (480×480)
 
 Ce tableau résume **le mapping réel et fonctionnel** du board Waveshare ESP32-S3-Touch-LCD-4, tel qu’utilisé par le BSP officiel et validé en pratique.
 
@@ -163,7 +205,7 @@ Ce tableau résume **le mapping réel et fonctionnel** du board Waveshare ESP32-
 
 ---
 
-### 1️⃣ Alimentation & contrôle LCD (via IO Expander)
+### 1️⃣ Power & contrôle LCD (via IO Expander)
 
 | Fonction        | Composant | GPIO ESP32-S3 | Détail |
 |----------------|----------|---------------|--------|
@@ -184,7 +226,7 @@ IO Expander :
 | SDA    | GPIO15 |
 | SCL    | GPIO7  |
 
-Adresses I²C observées sur le bus :
+I²C addresses observed on the bus :
 - `0x24` → **TCA9554** (IO Expander)
 - `0x5D` → **GT911** (Touch)
 - `0x51` → RTC (probable)
@@ -202,7 +244,7 @@ Adresses I²C observées sur le bus :
 
 ---
 
-### 4️⃣ LCD — Signaux de synchronisation RGB
+### 4️⃣ LCD — RGB synchronization signals
 
 | Signal | GPIO ESP32-S3 |
 |------|---------------|
@@ -216,10 +258,10 @@ Adresses I²C observées sur le bus :
 
 ### 5️⃣ LCD — Bus RGB Data (16 bits)
 
-Le LCD utilise un bus **RGB 16-bit parallèle**.  
-L’ordre exact est **critique** et dépend du PCB.
+The LCD uses a **16-bit parallel RGB** bus.  
+The exact order is **critical** and depends on the PCB.
 
-Mapping validé (D0 → D15) :
+Mapping validated (D0 → D15) :
 
 | Data bit | GPIO |
 |---------|------|
@@ -240,14 +282,25 @@ Mapping validé (D0 → D15) :
 | D14 | GPIO47 |
 | D15 | GPIO21 |
 
-> ℹ️  
-> Ce mapping correspond à la configuration utilisée par le BSP Waveshare et validée avec un framebuffer RGB565 en PSRAM.
+
+**LCD RGB Data (16-bit)**
+
+The data pins are divided into R/G/B groups (see table in the diagram).
+Example of a successfully used set (order D0..D15 according to RGB driver):
+
+```c
+[14, 13, 12, 11, 10, 9, 46, 3, 8, 18, 17, 5, 45, 48, 47, 21]
+
+```
+
+> Note : this type of RGB panel, the exact order D0..D15 (and the R/G/B correspondence) depends on the PCB mapping. Refer to the diagram and/or the BSP that encapsulates the configuration.
+> This mapping corresponds to the configuration used by the Waveshare BSP and validated with an RGB565 framebuffer in PSRAM.
 
 ---
 
 ### 6️⃣ SPI — Initialisation ST7701 (3-wire)
 
-Le ST7701 **n’est pas un écran SPI**, mais **il doit être initialisé via SPI** avant que le RGB fonctionne.
+The ST7701 **is not an SPI display**, but **it must be initialized via SPI** before the RGB will work.
 
 | Signal | GPIO ESP32-S3 |
 |------|---------------|
@@ -255,87 +308,170 @@ Le ST7701 **n’est pas un écran SPI**, mais **il doit être initialisé via SP
 | SCL  | (interne BSP) |
 | SDA  | (interne BSP) |
 
-> Le bus SPI est **uniquement utilisé au boot** pour envoyer la séquence d’initialisation ST7701.  
-> Ensuite, seul le RGB parallèle est actif.
+> The SPI bus is **only used at boot time** to send the ST7701 initialization sequence.  
+> Then, only parallel RGB is active.
 
 ---
 
-Mapping GPIO (Waveshare ESP32-S3-Touch-LCD-4)
+## 🧪 Troubleshooting checklist
 
-Source : schéma/table Waveshare (Wiki + SCH/PDF).  ￼
+Black screen but no crash
+	•	Backlight ON ? (BL_EN via TCA9554)
+	•	ST7701 initialized ? (logs st7701: version ...)
+	•	draw_bitmap ESP_OK but nothing changes => ST7701 not configured or incorrect RGB timings/polarity
 
-Signaux LCD (contrôle / synchro)
-	•	GPIO38 : LCD_HSYNC
-	•	GPIO39 : LCD_VSYNC
-	•	GPIO40 : LCD_DE (DEN)
-	•	GPIO41 : LCD_PCLK
-	•	GPIO42 : LCD_CS (SPI init ST7701)
+Crash ESP_ERR_NO_MEM during esp_lcd_new_rgb_panel
+	•	Init PSRAM in IDF  menuconfig
+	•	Forcergb_config.flags.fb_in_psram = 1
+	•	Reduce to num_fbs = 1
 
-Bus I²C Touch / IO expander / RTC
-	•	GPIO15 : I²C SDA (TP_SDA)
-	•	GPIO7  : I²C SCL (TP_SCL)
-	•	GPIO16 : Touch INT (TP_INT)
+Reboot with PSRAM ID read error ... wrong PSRAM line mode
+	•	Change Quad Mode PSRAM ↔ Octal Mode PSRAM 
+    
+The BSP requires ESP-IDF >= 5.3. 
+	•	Avoid IDF dev versions (6.x-dev) for this board as long as the BSP does not explicitly announce support.
 
-Adresses I²C observées :
-	•	0x24 : TCA9554 (IO expander)
-	•	0x5D : GT911 (touch)
-	•	0x51 : RTC probable
+---
 
-IO Expander (TCA9554 @ 0x24)
-	•	EXIO1 : TP_RST
-	•	EXIO2 : BL_EN (Backlight enable)
-	•	EXIO3 : LCD_RST
+## 🎛 Example: LVGL Light Control Dashboard
 
-LCD RGB Data (16-bit)
+This repository includes a simple example demonstrating how to build a **touch dashboard**
+on the Waveshare ESP32-S3-Touch-LCD-4 using **LVGL**.
 
-Les data pins sont réparties en groupes R/G/B (voir tableau du schéma).
-Exemple de set utilisé avec succès (ordre D0..D15 selon driver RGB) :
+The example displays:
+- A full-screen background image
+- Two touch buttons to **turn lights ON / OFF**
+- Time display
+- Temperature display
+- Custom icons and UI elements
 
-```c
-[14, 13, 12, 11, 10, 9, 46, 3, 8, 18, 17, 5, 45, 48, 47, 21]
+The application uses an **MQTT server** to control the lights, but it can be easily
+adapted to other communication methods (HTTP, local GPIO, Home Assistant API, etc.).
 
+### System Architecture Diagram
+```mermaid
+
+flowchart LR
+
+  subgraph ESP32["ESP32-S3"]
+    APP["Application"]
+    LVGL["LVGL UI"]
+    MQTT["MQTT Client"]
+    WIFI["Wi-Fi"]
+    RGBDRV["RGB LCD Driver"]
+    PSRAM["PSRAM Framebuffers"]
+    TOUCH["Touch Controller"]
+  end
+
+  subgraph LCD["Waveshare LCD Panel"]
+    ST7701["ST7701 Controller"]
+    PANEL["480x480 TFT"]
+  end
+
+  subgraph HA["Home Assistant / MQTT Broker"]
+    BROKER["MQTT Broker"]
+    LIGHT["Lights"]
+    SENSOR["Temperature Source"]
+  end
+
+  APP --> LVGL
+  APP --> MQTT
+  APP --> WIFI
+
+  LVGL --> RGBDRV --> PANEL
+  RGBDRV --> PSRAM
+  TOUCH --> LVGL
+
+  MQTT --> BROKER
+  BROKER --> LIGHT
+  SENSOR --> BROKER
+  BROKER --> MQTT
+
+  ST7701 --> PANEL
 ```
 
-> Remarque : sur ce type de panel RGB, l’ordre exact D0..D15 (et la correspondance R/G/B) dépend du mapping du PCB. Se fier au schéma et/ou au BSP qui encapsule la config.
+---
 
+### 🖼️ Screenshots
+![screen.jpg](imgs/screen.jpg)
+
+---
+### LVGL Images
+
+All graphical assets used by the UI were converted into **C image structures**
+using the official **LVGL Image Converter**:
+- Background image
+- Button icons (ON / OFF)
+- Clock display graphics
+- Temperature display graphics
+
+This allows the UI to run fully embedded without requiring a filesystem.
+
+### Requirements
+
+- ESP-IDF (recommended v5.4.x)
+- LVGL
+- MQTT broker (e.g. Mosquitto / Home Assistant)
+
+### MQTT Configuration and Topics
+
+MQTT topics are defined in `mqtt_config.c` and used by the LVGL UI to control two lights (left/right) and display room temperature.
+
+#### Topics
+
+| Purpose | Topic |
+|--------|-------|
+| Left lamp command | `home/roo1panel/lamp_left/cmd` |
+| Left lamp state | `home/roo1panel/lamp_left/state` |
+| Right lamp command | `home/roo1panel/lamp_right/cmd` |
+| Right lamp state | `home/roo1panel/lamp_right/state` |
+| Temperature | `home/roo1panel/temperature` |
+| Panel status | `home/roo1panel/status` |
+
+**Notes**
+- The ESP32 publishes commands to `*/cmd` when a button is pressed.
+- The UI can optionally reflect the actual light state by subscribing to `*/state`.
+- Temperature updates are received via `home/roo1panel/temperature`.
 
 ---
 
-Checklist de dépannage
+### Wi-Fi Configuration
 
-Écran noir mais pas de crash
-	•	Backlight ON ? (BL_EN via TCA9554)
-	•	ST7701 initialisé ? (logs st7701: version ...)
-	•	draw_bitmap ESP_OK mais rien ne change => ST7701 pas configuré ou RGB timings/polarité incorrects
+Wi-Fi credentials and settings are defined in:
 
-Crash ESP_ERR_NO_MEM lors de esp_lcd_new_rgb_panel
-	•	Activer PSRAM dans menuconfig
-	•	Forcer rgb_config.flags.fb_in_psram = 1
-	•	Réduire à num_fbs = 1
+- `wifi_config.c`
 
-Reboot avec PSRAM ID read error ... wrong PSRAM line mode
-	•	Changer Quad Mode PSRAM ↔ Octal Mode PSRAM 
+You must update this file with your own Wi-Fi parameters before building/flashing.
 
 ---
 
-	•	Le BSP exige ESP-IDF >= 5.3.  ￼
-	•	Éviter les versions IDF dev (6.x-dev) pour ce board tant que le BSP n’annonce pas explicitement le support.
+### LVGL Assets (C Image Files)
 
+All icons and the background are embedded as C structures (generated with the **LVGL Image Converter**) and stored in the following files:
 
----
-
-🔚 Conclusion
-
-Ce board fonctionne parfaitement, mais :
-	•	la doc Arduino est insuffisante
-	•	la PSRAM doit être correctement configurée
-	•	le ST7701 doit être initialisé correctement
-	•	le BSP ESP-IDF est aujourd’hui la solution la plus fiable
+- Temperature icons: `ui_thermostat_icon.c`
+- Clock icon: `ui_img_clock_icon.c`
+- Lamp button icons: `floor_lamp.c`
+- Background image: `backg_room1.c`
+These topics are only examples and can be easily modified in the source code.
 
 ---
 
-Ressources
 
-waveshare/esp32_s3_touch_lcd_4
-https://components.espressif.com/components/waveshare/esp32_s3_touch_lcd_4/versions/1.0.3/dependencies?language=en&utm_source=chatgpt.com
+## 🔚 Conclusion
 
+This board works perfectly, but:
+	•	The Waveshare and Arduino documentation are insufficient
+    •    The PSRAM must be configured correctly
+    •    The ST7701 must be initialized correctly
+    •    The ESP-IDF BSP is currently the most reliable solution
+
+---
+
+## 📚 References
+
+[Waveshare/esp32_s3_touch_lcd_4](https://components.espressif.com/components/waveshare/esp32_s3_touch_lcd_4/versions/1.0.3/dependencies?language=en)
+[Waveshare ESP32-S3 4inch Display Development Board](https://www.waveshare.com/esp32-s3-touch-lcd-4.htm?sku=28154)
+[Getting Started with ESP-IDF](https://idf.espressif.com/)
+[LVGL Library](https://lvgl.io/)
+[LVGL Image Converter](https://lvgl.io/tools/imageconverter)

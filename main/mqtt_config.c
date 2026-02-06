@@ -1,10 +1,10 @@
 #include "mqtt_config.h"
 
 const MqttConfig mqtt_config = {
-  .host = "192.168.0.165",
+  .host = "X.X.X.X",
   .port = 1883,
-  .user = "mqtt",
-  .pass = "Sub40winec@",
+  .user = "mqtt_user",
+  .pass = "mqtt_password",
 
   .base = "home/roo1panel",
 
